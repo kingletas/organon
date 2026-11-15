@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""organon-check: refuse a skill or agent that would load wrong, or load blind.
+
+Usage:
+    bin/organon-check [ROOT]
+
+ROOT defaults to the repository this script sits in. Silent and exit 0 when
+everything conforms; one line per problem and exit 1 when something does not.
+
+What it checks, and why each one is here:
+
+- Every agent lists its tools in lower case. Cortex Code matches tool names
+  case-sensitively and skips one it does not recognise without an error, so an
+  agent whose tools are written `Read, Grep` starts with no tools and says
+  nothing. A copy for Claude Code gets its capitalized names from the
+  installer, so the repository keeps one spelling.
+- Every agent's `name` matches its file name, and every skill's `name` matches
+  its folder. Both tools find them by that name.
+- Every skill and agent has a description, which is how either tool decides
+  when to use it.
+- A skill that says it reads a core first names a core that exists here, so a
+  copied skill never points at one that was left behind.
+- No skill, agent or document names a place on one person's machine: a home directory, a path
+  under the tilde other than the two tools' own folders, or a Windows user
+  folder. The kit has to work on a machine that has none of them.
+- A review agent named anywhere in the kit (`review-*` or `quorum-*`) is in
+  agents/, so no skill sends the reader to a role that was never carried over.
+- An alert (`> [!NOTE]` and its kin) is one of the five GitHub renders, on a
+  line of its own. Anything else shows as a plain quote with stray brackets.
+
+It needs nothing but Python 3.9 or newer, so it runs on a bare runner and on a
+locked-down workstation alike.
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+MACHINE_PATHS = [
+    (re.compile(r"/home/[a-z_][a-z0-9_-]*/"), "a Linux home directory"),
+    (re.compile(r"/Users/[A-Za-z0-9_.-]+/"), "a macOS home directory"),
+    (re.compile(r"[A-Za-z]:\\Users\\"), "a Windows user folder"),
+    (re.compile(r"(?<![\w.])~/(?!\.claude/|\.snowflake/)"), "a path under someone's home"),
+]
+
+CORE_REFERENCE = re.compile(r"core[\s:*`]+([a-z0-9]+(?:-[a-z0-9]+)*-base)\b")
+AGENT_REFERENCE = re.compile(r"`((?:review|quorum)-[a-z]+(?:-[a-z]+)*)`")
+ALERT = re.compile(r"^>\s*\[!([A-Za-z]+)\](.*)$")
+ALERT_TYPES = {"NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"}
+
+
+def front_matter(path: Path) -> tuple[dict[str, object], str] | None:
+    """The YAML front matter as a flat dict, and the body after it.
+
+    Only what these files use is understood: `key: value` lines, and a
+    `tools:` given either inline (`a, b`) or as a `- item` list. That keeps the
+    check free of a YAML dependency.
+    """
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith("---\n"):
+        return None
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return None
+    fields: dict[str, object] = {}
+    current_list: list[str] | None = None
+    for line in text[4:end].splitlines():
+        item = re.match(r"^\s*-\s+(.*)$", line)
+        if item and current_list is not None:
+            current_list.append(item.group(1).strip().strip("\"'"))
+            continue
+        pair = re.match(r"^([A-Za-z_][\w-]*):\s*(.*)$", line)
+        if not pair:
+            continue
+        key, value = pair.group(1), pair.group(2).strip()
+        if value == "":
+            current_list = []
+            fields[key] = current_list
+        else:
+            current_list = None
+            fields[key] = value.strip("\"'")
+    return fields, text[end + 5 :]
+
+
+def tool_names(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [v for v in value if v]
+    if isinstance(value, str):
+        return [v.strip() for v in value.split(",") if v.strip()]
+    return []
+
+
+def check(root: Path) -> list[str]:
+    problems: list[str] = []
+    skills_dir = root / "skills"
+    agents_dir = root / "agents"
+    skills = sorted(p for p in skills_dir.glob("*/SKILL.md")) if skills_dir.is_dir() else []
+    agents = sorted(agents_dir.glob("*.md")) if agents_dir.is_dir() else []
+    skill_names = {p.parent.name for p in skills}
+
+    for path in agents:
+        rel = path.relative_to(root)
+        parsed = front_matter(path)
+        if parsed is None:
+            problems.append(f"{rel}: no front matter")
+            continue
+        fields, _ = parsed
+        if fields.get("name") != path.stem:
+            problems.append(f"{rel}: name is {fields.get('name')!r}, the file is {path.stem!r}")
+        if not fields.get("description"):
+            problems.append(f"{rel}: no description")
+        tools = tool_names(fields.get("tools"))
+        if not tools:
+            problems.append(f"{rel}: no tools listed")
+        for tool in tools:
+            if tool != tool.lower():
+                problems.append(
+                    f"{rel}: tool {tool!r} is capitalized; Cortex Code skips it silently, "
+                    f"write {tool.lower()!r}"
+                )
+
+    for path in skills:
+        rel = path.relative_to(root)
+        parsed = front_matter(path)
+        if parsed is None:
+            problems.append(f"{rel}: no front matter")
+            continue
+        fields, body = parsed
+        if fields.get("name") != path.parent.name:
+            problems.append(
+                f"{rel}: name is {fields.get('name')!r}, the folder is {path.parent.name!r}"
+            )
+        if not fields.get("description"):
+            problems.append(f"{rel}: no description")
+        for core in sorted(set(CORE_REFERENCE.findall(body))):
+            if core not in skill_names:
+                problems.append(f"{rel}: reads the core {core!r}, which is not in skills/")
+
+    # What gets installed or read as instructions: the skills, the agents, the
+    # documents and the top-level Markdown. The checker and its tests are left
+    # out, since they have to spell the very paths they look for.
+    content = list(root.glob("*.md"))
+    for folder in ("skills", "agents", "docs"):
+        if (root / folder).is_dir():
+            content.extend(p for p in (root / folder).rglob("*") if p.is_file())
+    for path in sorted(content):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        rel = path.relative_to(root)
+        for number, line in enumerate(text.splitlines(), 1):
+            for pattern, what in MACHINE_PATHS:
+                if pattern.search(line):
+                    problems.append(f"{rel}:{number}: names {what}")
+            for agent in AGENT_REFERENCE.findall(line):
+                if not (agents_dir / f"{agent}.md").is_file():
+                    problems.append(f"{rel}:{number}: names the agent {agent!r}, which is not in agents/")
+            alert = ALERT.match(line)
+            if alert and (alert.group(1) not in ALERT_TYPES or alert.group(2).strip()):
+                problems.append(
+                    f"{rel}:{number}: alert [!{alert.group(1)}] is not one GitHub renders; "
+                    f"use one of {', '.join(sorted(ALERT_TYPES))}, alone on its line"
+                )
+    return problems
+
+
+def main(argv: list[str]) -> int:
+    root = Path(argv[1]).resolve() if len(argv) > 1 else Path(__file__).resolve().parent.parent
+    problems = check(root)
+    for problem in problems:
+        print(problem)
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

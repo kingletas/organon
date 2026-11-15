@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+#
+# install -- copy the skills and agents where Cortex Code or Claude Code reads them.
+#
+# Usage:
+#   scripts/install [DEST]
+#
+# DEST is the folder that holds `skills/` and `agents/`. It defaults to
+# Cortex Code's own, `$HOME/.snowflake/cortex`, which both its CLI and its
+# Desktop app read. For Claude Code, or for one project, pass its folder:
+#   scripts/install "$HOME/.claude"
+#   scripts/install path/to/project/.claude
+#
+# Environment overrides:
+#   FORCE=1          replace a file that already exists with different contents
+#   TOOL_NAMES=      `cortex` (lower case: read, bash) or `claude` (capitalized:
+#                    Read, Bash). Default: `claude` when DEST's last folder is
+#                    `.claude`, `cortex` otherwise
+#   ORGANON_SOURCE   the folder holding skills/ and agents/ to copy (default:
+#                    this repository; the tests point it at a fixture)
+#
+# The two tools spell an agent's tools differently. Cortex Code matches them
+# case-sensitively and skips one it does not know without an error, so the
+# repository keeps its lower-case names. Claude Code's documentation shows the
+# capitalized names and does not say lower case works, so a copy meant for it
+# is written with those.
+#
+# Nothing here needs administrator rights: every destination is under the
+# user's own home or a project they can write.
+#
+# An existing file with different contents is never overwritten without
+# FORCE=1, because a person's own skill of the same name is theirs, and a copy
+# that silently replaced it would be the kit deciding for them.
+
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SOURCE="${ORGANON_SOURCE:-$HERE}"
+DEST="${1:-$HOME/.snowflake/cortex}"
+FORCE="${FORCE:-0}"
+if [ "$(basename "${DEST%/}")" = ".claude" ]; then
+  TOOL_NAMES="${TOOL_NAMES:-claude}"
+else
+  TOOL_NAMES="${TOOL_NAMES:-cortex}"
+fi
+case "$TOOL_NAMES" in
+  cortex|claude) ;;
+  *) echo "install: TOOL_NAMES must be cortex or claude, not '$TOOL_NAMES'" >&2; exit 2 ;;
+esac
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+copied=0
+same=0
+refused=0
+
+# An agent's front matter with its tool names spelled for Claude Code. Only the
+# `tools:` entries inside the front matter change; the body is copied as it is.
+claude_names() {
+  awk '
+    BEGIN { split("bash Bash read Read write Write edit Edit grep Grep glob Glob", m, " ")
+            for (i = 1; i < 12; i += 2) name[m[i]] = m[i + 1] }
+    function spell(t) { return (t in name) ? name[t] : t }
+    NR == 1 && $0 == "---" { inside = 1; print; next }
+    inside && $0 == "---" { inside = 0; intools = 0; print; next }
+    inside && /^tools:[ \t]*$/ { intools = 1; print; next }
+    inside && /^tools:[ \t]*[^ \t]/ {
+      sub(/^tools:[ \t]*/, ""); n = split($0, t, /[ \t]*,[ \t]*/); out = ""
+      for (i = 1; i <= n; i++) out = out (i > 1 ? ", " : "") spell(t[i])
+      print "tools: " out; intools = 0; next }
+    inside && intools && /^[ \t]*-[ \t]+/ {
+      match($0, /^[ \t]*-[ \t]+/); lead = substr($0, 1, RLENGTH); t = substr($0, RLENGTH + 1)
+      print lead spell(t); next }
+    inside && intools && !/^[ \t]*-/ { intools = 0 }
+    { print }
+  ' "$1"
+}
+
+place() {
+  local src="$1" dst="$2"
+  if [ -e "$dst" ]; then
+    if cmp -s "$src" "$dst"; then
+      same=$((same + 1))
+      return
+    fi
+    if [ "$FORCE" != "1" ]; then
+      echo "install: $dst exists and differs; left alone (FORCE=1 replaces it)" >&2
+      refused=$((refused + 1))
+      return
+    fi
+  fi
+  mkdir -p "$(dirname "$dst")"
+  cp "$src" "$dst"
+  copied=$((copied + 1))
+}
+
+if [ -d "$SOURCE/skills" ]; then
+  while IFS= read -r -d '' file; do
+    place "$file" "$DEST/skills/${file#"$SOURCE/skills/"}"
+  done < <(find "$SOURCE/skills" -type f -print0)
+fi
+
+if [ -d "$SOURCE/agents" ]; then
+  while IFS= read -r -d '' file; do
+    if [ "$TOOL_NAMES" = "claude" ]; then
+      spelled="$WORK/$(basename "$file")"
+      claude_names "$file" > "$spelled"
+      place "$spelled" "$DEST/agents/${file#"$SOURCE/agents/"}"
+    else
+      place "$file" "$DEST/agents/${file#"$SOURCE/agents/"}"
+    fi
+  done < <(find "$SOURCE/agents" -type f -name '*.md' -print0)
+fi
+
+echo "install: $copied copied, $same already current, $refused left alone, into $DEST"
+[ "$refused" -eq 0 ]
