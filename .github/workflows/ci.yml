@@ -16,13 +16,18 @@ permissions:
 jobs:
   check:
     name: make check (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         # The checker runs on whatever Python a workstation already has, so the
-        # oldest supported version is tested alongside the newest.
-        python-version: ["3.9", "3.13"]
+        # oldest supported version is tested alongside the newest. Ubuntu 26.04
+        # has no Python 3.9 build, so the 3.9 job runs on 24.04.
+        include:
+          - python-version: "3.9"
+            os: ubuntu-24.04
+          - python-version: "3.13"
+            os: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
