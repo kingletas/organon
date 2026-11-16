@@ -40,12 +40,12 @@ Code that crosses a line answers to both sides. Read the contract before you rel
 
 **Review agents** live in `agents/`: `quorum-code`, `quorum-design`, `quorum-risk`, `review-triage`, `review-senior`, `review-synthesis`, `review-verify`, `review-security`, `review-database`, `review-perf`, `review-infra`, `review-api`, `review-compat`, `review-docs`, `review-release`, `review-scope`, `review-ui`, `review-accessibility`, `review-decision`, `review-communication`, plus `write-tests` and `bulk-reader`. Use the one whose description matches the change in front of you, and give it the diff.
 
-**Six work seats** also live in `agents/`. Each is a role the engineer uses for one kind of work, and the first stretch on a new team is for learning, so the reading seats come first:
+**Work seats** also live in `agents/`, each a role the engineer uses for one kind of work:
 
 | Seat | For | Changes things? |
 |---|---|---|
 | `platform-reader` | Reading and explaining the platform's code, infrastructure and history | No, read-only |
-| `chief-of-staff` | The first-90-days plan, 1:1 prep, questions to ask, status for leadership | Writes notes and drafts only |
+| `chief-of-staff` | Plans, 1:1 prep, questions to ask, status for leadership | Writes notes and drafts only |
 | `data-hand` | The Snowflake side: what the warehouse holds, queries, semantic models | Reads and queries; never changes data without explicit approval |
 | `security-reviewer` | A skeptic on any change touching payments, authentication or customer data | No, read-only review |
 | `incident-voice` | Updates during an outage and the review after it | Drafts; never sends |
