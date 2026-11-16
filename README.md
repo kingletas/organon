@@ -34,6 +34,7 @@ It carries three engineering contracts (development, security, infrastructure), 
 | `security-reviewer` | The skeptic on changes touching payments, authentication or customer data | No |
 | `incident-voice` | Updates during an outage and the review after it | Drafts, never sends |
 | `platform-engineer` | Fixes and reliability work, on an explicit request | Yes |
+
 ## Why it works in both tools
 
 Cortex Code reads the same folders Claude Code does: skills from `.claude/skills/`, agents from `.claude/agents/`, hooks from `.claude/settings.json`, and the project's rules from `AGENTS.md` ([CoCo CLI extensibility](https://docs.snowflake.com/en/user-guide/cortex-code/extensibility)). So one copy serves both.
@@ -70,6 +71,7 @@ Start with [From nothing to a working organon](docs/from-nothing.md).
 
 - **A design system.** `review-ui` and `review-accessibility` judge against one only where a repository has adopted it (a tokens file and a rules file at its root), and say so when it has not.
 - **A visual design skill.** `design-a-screen` covers the states every view owes; for aesthetic direction, pair it with one such as Anthropic's [`frontend-design`](https://github.com/anthropics/skills/tree/main/skills/frontend-design).
+
 ## The gate
 
 ```bash
